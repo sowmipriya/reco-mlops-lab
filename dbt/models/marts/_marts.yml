@@ -2,15 +2,21 @@ version: 2
 
 models:
   - name: dim_products
-    description: Product dimension with promotion history.
+    description: Product dimension (DIY departments mapped from the source category tree).
     columns:
       - name: product_id
         data_tests: [unique, not_null]
 
   - name: dim_customers
+    description: Customers with a behavioural segment computed from the train period only.
     columns:
       - name: customer_id
         data_tests: [unique, not_null]
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["tools", "kitchen", "plumbing_bathroom", "heating_climate", "storage_lighting", "garden", "new_customer"]
 
   - name: fct_interactions
     description: >
@@ -68,14 +74,14 @@ models:
       - elementary.volume_anomalies:
           arguments:
             time_bucket: {period: day, count: 1}
-            training_period: {period: day, count: 60}
+            training_period: {period: day, count: 23}
             detection_period: {period: day, count: 7}
           config:
             severity: warn
       - elementary.dimension_anomalies:
           arguments:
             dimensions: ["event_type"]
-            training_period: {period: day, count: 60}
+            training_period: {period: day, count: 23}
             detection_period: {period: day, count: 7}
           config:
             severity: warn

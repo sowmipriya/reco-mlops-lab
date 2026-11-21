@@ -43,8 +43,8 @@ resource "google_bigquery_dataset" "layers" {
   location    = var.bq_location
   labels      = local.labels
 
-  # Keep raw data cheap: expire partitions after 400 days by default.
-  default_partition_expiration_ms = each.key == "raw" ? 400 * 24 * 3600 * 1000 : null
+  # No default partition expiry: the public dataset is historical (2019), and an expiry
+  # would silently drop its partitions on load. Retention is set per table when needed.
 
   depends_on = [google_project_service.services]
 }

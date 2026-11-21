@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6380/0"
     recent_events_max: int = 20
 
+    # Data: which raw dataset the models were trained on (champion scores are only comparable within one)
+    data_source: str = "rees46-2019-11-diy"
+
     # Modelling
     top_k: int = 10
     test_days: int = 14

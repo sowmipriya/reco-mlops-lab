@@ -1,7 +1,4 @@
 select
     customer_id,
-    segment,
-    region,
-    loyalty_member,
-    timestamp(signup_ts) as signup_ts
+    timestamp(first_seen_ts) as first_seen_ts
 from {{ source('raw', 'customers') }}

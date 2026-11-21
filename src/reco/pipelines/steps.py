@@ -16,7 +16,7 @@ from reco.data.bigquery import read_table
 from reco.evaluation.metrics import evaluate
 from reco.feature_store.online import OnlineFeatureStore
 from reco.models.pyfunc import log_recommender
-from reco.models.recommender import EmbeddingRecommender, PopularityRecommender, RecommenderParams
+from reco.models.recommender import EmbeddingRecommender, RecentlyViewedRecommender, RecommenderParams
 from reco.pipelines.materializers import EmbeddingRecommenderMaterializer
 
 
@@ -102,10 +102,11 @@ def evaluate_baseline(
     products: pd.DataFrame,
     k: int,
 ) -> Annotated[dict, "baseline_metrics"]:
-    """Segment popularity: the bar any personalised model must clear."""
+    """Recently viewed + segment popularity fill: the bar any model must clear.
+    On real data this heuristic beats plain popularity by 4x, so it is the honest baseline."""
     relevant, history, users, segments = _eval_inputs(interactions, customers, eval_targets)
-    baseline = PopularityRecommender().fit(interactions, customers)
-    recs = {u: baseline.recommend(s, k) for u, s in zip(users, segments, strict=True)}
+    baseline = RecentlyViewedRecommender().fit(interactions, customers)
+    recs = {u: baseline.recommend(history[u], s, k) for u, s in zip(users, segments, strict=True)}
     metrics = evaluate(recs, relevant, k, catalog_size=int(products["is_active"].sum()))
     log_metadata(metadata={"baseline": metrics})
     return metrics
@@ -136,6 +137,7 @@ def register_and_promote(
         mlflow.log_metric("explained_variance", model.explained_variance)
         info = log_recommender(model, s.model_name)
         mlflow.set_tag("training_pipeline", "zenml")
+        mlflow.set_tag("data_source", s.data_source)
 
     version = str(info.registered_model_version)
     candidate = model_metrics[key]
@@ -151,6 +153,7 @@ def register_and_promote(
     promoted = beats_baseline and (champion is None or candidate > champion_score)
     client.set_model_version_tag(s.model_name, version, "validation_status", "passed" if promoted else "rejected")
     client.set_model_version_tag(s.model_name, version, key, f"{candidate:.4f}")
+    client.set_model_version_tag(s.model_name, version, "data_source", s.data_source)
     if promoted:
         client.set_registered_model_alias(s.model_name, s.champion_alias, version)
 

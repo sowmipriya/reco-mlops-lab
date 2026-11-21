@@ -26,7 +26,8 @@ class RecommenderParams:
     recency_decay: float = 0.95  # weight multiplier per position in the recency-ordered history
     popularity_blend: float = 1.0  # weight of the popularity prior vs embedding similarity
     segment_prior: bool = True  # use the customer's segment popularity as prior when known
-    exclude_seen: bool = False  # DIY customers often re-buy consumables
+    exclude_seen: bool = False  # re-engaging with a seen product is common (comparison shopping)
+    seen_boost: float = 2.0  # extra score for products in the history, scaled by recency (re-engagement)
     history_size: int = 20
     seed: int = 42
 
@@ -61,6 +62,7 @@ class EmbeddingRecommender:
         """interactions: customer_id, product_id, weight. products: product_id, category[, is_active]."""
         active = products[products.get("is_active", True) == True]  # noqa: E712
         self.item_ids = active["product_id"].to_numpy()
+        self._item_index = None  # rebuilt lazily for the new catalogue
         self.item_category = active["category"].to_numpy()
         item_index = {pid: i for i, pid in enumerate(self.item_ids)}
 
@@ -98,9 +100,16 @@ class EmbeddingRecommender:
         return self
 
     # ------------------------------------------------------------ inference
+    @property
+    def item_index(self) -> dict[str, int]:
+        """product_id -> row, built once (it is used on every request)."""
+        if getattr(self, "_item_index", None) is None:
+            self._item_index = {pid: i for i, pid in enumerate(self.item_ids)}
+        return self._item_index
+
     def _history_matrix(self, histories: list[list[str]]) -> sparse.csr_matrix:
         """Sparse (n_users, n_items) matrix of recency-decayed history weights."""
-        index = {pid: i for i, pid in enumerate(self.item_ids)}
+        index = self.item_index
         rows, cols, vals = [], [], []
         for r, history in enumerate(histories):
             seen: set[int] = set()
@@ -125,22 +134,33 @@ class EmbeddingRecommender:
         user_vectors = normalize(hist @ self.item_embeddings)
         scores = user_vectors @ self.item_embeddings.T
         scores += self.params.popularity_blend * self._prior(segments, len(histories))
+        if self.params.seen_boost:
+            coo = hist.tocoo()
+            scores[coo.row, coo.col] += self.params.seen_boost * coo.data
         if self.params.exclude_seen:
             scores[hist.nonzero()] = -np.inf
         return scores
 
     def recommend_batch(
-        self, histories: list[list[str]], k: int = 10, segments: list[str | None] | None = None
+        self,
+        histories: list[list[str]],
+        k: int = 10,
+        segments: list[str | None] | None = None,
+        batch_size: int = 1024,
     ) -> list[list[str]]:
-        scores = self.score_batch(histories, segments)
-        top = np.argpartition(-scores, kth=min(k, scores.shape[1] - 1), axis=1)[:, :k]
-        ordered = np.take_along_axis(top, np.argsort(-np.take_along_axis(scores, top, 1), 1), 1)
-        return [self.item_ids[row].tolist() for row in ordered]
+        """Top-k for many users, scored in chunks so memory stays at batch_size x n_items."""
+        out: list[list[str]] = []
+        for start in range(0, len(histories), batch_size):
+            chunk_segments = segments[start : start + batch_size] if segments else None
+            scores = self.score_batch(histories[start : start + batch_size], chunk_segments)
+            top = np.argpartition(-scores, kth=min(k, scores.shape[1] - 1), axis=1)[:, :k]
+            ordered = np.take_along_axis(top, np.argsort(-np.take_along_axis(scores, top, 1), 1), 1)
+            out.extend(self.item_ids[row].tolist() for row in ordered)
+        return out
 
     def recommend(self, history: list[str], segment: str | None = None, k: int = 10) -> Recommendation:
         """Personalised if the customer has known history, else segment / global popularity."""
-        catalog = set(self.item_ids)
-        known = [p for p in history if p in catalog]
+        known = [p for p in history if p in self.item_index]
         if known:
             scores = self.score_batch([known], [segment])[0]
             top = np.argsort(-scores)[:k]
@@ -175,6 +195,27 @@ class EmbeddingRecommender:
         sims[matches[0]] = -np.inf
         top = np.argsort(-sims)[:k]
         return Recommendation(self.item_ids[top].tolist(), sims[top].astype(float).round(4).tolist(), "item_similarity")
+
+
+class RecentlyViewedRecommender:
+    """Strong heuristic baseline on real e-commerce data: show the customer's most recent
+    products again, then fill the list with their segment's most popular products."""
+
+    def __init__(self) -> None:
+        self.popularity = PopularityRecommender()
+
+    def fit(self, interactions: pd.DataFrame, customers: pd.DataFrame | None = None) -> RecentlyViewedRecommender:
+        self.popularity.fit(interactions, customers)
+        return self
+
+    def recommend(self, history: list[str], segment: str | None = None, k: int = 10) -> list[str]:
+        out = list(dict.fromkeys(history))[:k]
+        for pid in self.popularity.recommend(segment, k + len(out)):
+            if len(out) == k:
+                break
+            if pid not in out:
+                out.append(pid)
+        return out
 
 
 class PopularityRecommender:

@@ -4,6 +4,8 @@ export
 
 DBT = cd dbt && DBT_PROFILES_DIR=. dbt
 export ZENML_ANALYTICS_OPT_IN=false
+# One month of the public REES46 dataset (Kaggle), see src/reco/data/prepare_rees46.py
+REES46_ZIP ?= data/source/2019-Nov.csv.zip
 
 .PHONY: help infra data load dbt-deps dbt-build services mlflow train materialize serve test lint all
 
@@ -13,8 +15,8 @@ help:  ## Show targets
 infra:  ## Provision BigQuery datasets, GCS bucket, service account (Terraform)
 	cd infra/terraform && terraform init -input=false && terraform apply -var project_id=$(GCP_PROJECT)
 
-data:  ## Generate the synthetic DIY retail dataset
-	uv run python -m reco.data.generate --out data/raw
+data:  ## Prepare the public REES46 month as a DIY store (filter + reshape)
+	uv run python -m reco.data.prepare_rees46 --src $(REES46_ZIP) --out data/raw
 
 load:  ## Land raw data into BigQuery (Extract/Load)
 	uv run python -m reco.data.load_raw --src data/raw

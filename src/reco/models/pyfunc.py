@@ -37,7 +37,9 @@ def log_recommender(recommender: EmbeddingRecommender, registered_model_name: st
         path = Path(tmp) / "recommender.pkl"
         with open(path, "wb") as f:
             pickle.dump(recommender, f)
-        example = pd.DataFrame({"history": [list(recommender.item_ids[:3])], "segment": ["diy_beginner"]})
+        example = pd.DataFrame(
+            {"history": [list(recommender.item_ids[:3])], "segment": [next(iter(recommender.segment_top), None)]}
+        )
         wrapper = RecommenderPyfunc()
         wrapper.recommender = recommender
         signature = infer_signature(example, wrapper.predict(None, example), params={"k": 10})

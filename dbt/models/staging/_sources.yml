@@ -2,7 +2,9 @@ version: 2
 
 sources:
   - name: raw
-    description: Data landed from source domains (simulates Kafka topics / domain APIs).
+    description: >
+      Data landed from source domains. Here: one month of the public REES46 e-commerce
+      dataset, filtered to home-improvement categories (see src/reco/data/prepare_rees46.py).
     database: "{{ env_var('GCP_PROJECT') }}"
     schema: raw
     loaded_at_field: _loaded_at
@@ -15,6 +17,4 @@ sources:
       - name: products
         description: Product referential (catalogue domain).
       - name: customers
-        description: Customer referential (customer domain).
-      - name: promotions
-        description: Promotions (marketing domain).
+        description: Customer referential (customer domain). No attributes in the public data.

@@ -1,5 +1,5 @@
 -- Pre-built customer features served by the online feature store.
--- "as of" the last event in the data (the synthetic timeline is frozen).
+-- "as of" the last event in the data (the public month is a frozen timeline).
 with events as (
     select * from {{ ref('fct_interactions') }}
 ),
@@ -53,8 +53,7 @@ activity as (
 select
     c.customer_id,
     c.segment,
-    c.region,
-    c.loyalty_member,
+    c.first_seen_ts,
     coalesce(act.n_events_30d, 0)     as n_events_30d,
     coalesce(act.n_purchases_90d, 0)  as n_purchases_90d,
     act.last_event_ts,

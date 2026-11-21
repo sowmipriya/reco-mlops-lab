@@ -4,12 +4,18 @@ An end-to-end recommendation system for a home-improvement (DIY) retailer, built
 production team would: infrastructure as code, tested data pipelines, orchestrated ML pipelines
 with a model registry and promotion gate, an online feature store and a low-latency API.
 
+**Data: real, public behavioural data.** One month (November 2019, incl. Black Friday) of the
+[REES46 multi-category store dataset](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store),
+67.5M events streamed and filtered to the departments a DIY retailer sells (tools, kitchen,
+plumbing & bathroom, heating & climate, storage & lighting, garden):
+**3.6M events, 405k customers, 16.8k products**.
+
 | Layer | Tools |
 |---|---|
 | Infrastructure | Terraform (BigQuery datasets, GCS, service account + IAM) |
 | Data pipelines | BigQuery, dbt (tests, model contracts), Elementary (anomaly detection) |
 | ML pipelines | ZenML (orchestration, artifacts, lineage), MLflow (tracking, registry, aliases) |
-| Model | Item embeddings (truncated SVD on implicit feedback) + segment popularity prior |
+| Model | Item embeddings (truncated SVD on implicit feedback) + segment prior + recency boost on seen items |
 | Online features | Redis: batch-materialised features + real-time event stream |
 | Serving | FastAPI, Docker |
 | Quality | pytest, ruff, GitHub Actions (lint, tests, dbt parse, terraform validate, docker build) |
@@ -59,16 +65,16 @@ flowchart LR
     WEB -->|GET /reco?client_id=| API
 ```
 
-### Request path (`GET /reco?client_id=C000949&k=10`)
+### Request path (`GET /reco?client_id=U343318208&k=10`)
 1. One Redis round trip fetches **pre-built features** (segment, recent products from BigQuery) and
    **real-time features** (latest events pushed by the stream consumer).
 2. Histories are merged: real-time first, most recent first, deduplicated.
 3. The in-memory **champion model** (loaded once from the MLflow registry) builds a user vector from
-   the recency-weighted item embeddings and scores the catalogue, blended with the segment's
-   popularity prior.
+   the recency-weighted item embeddings, scores the 16.6k active products, adds the segment's
+   popularity prior and boosts the customer's own recent products (re-engagement).
 4. Fallbacks for cold start: segment popularity, then global popularity.
 
-Measured locally: **p50 3.5 ms, p95 5.3 ms, p99 15 ms** (200 random customers, k=10).
+Measured locally: **p50 10 ms, p95 16 ms, p99 21 ms** (300 random customers, k=10, brute-force scoring of 16.6k products).
 
 ### Three recommendation levels
 | Level | Endpoint | Strategy |
@@ -80,23 +86,31 @@ Measured locally: **p50 3.5 ms, p95 5.3 ms, p99 15 ms** (200 random customers, k
 
 ## Offline evaluation
 
-Temporal split: the last 14 days are held out (computed in dbt, so training data is point-in-time
-correct). Ground truth is add-to-cart and purchase events in the held-out window. 2,582 customers.
+Temporal split: the last 14 days (17-30 Nov, incl. Black Friday) are held out, computed in dbt so
+training data and customer segments are point-in-time correct. Ground truth is add-to-cart and
+purchase events in the held-out window. **9,774 evaluation customers**, 16,590 active products.
+Reproduce with `uv run python notebooks/compare_models.py`.
 
-| Model | NDCG@10 | Recall@10 | MAP@10 | Hit rate@10 | Catalogue coverage@10 |
+| Model | NDCG@10 | Recall@10 | MAP@10 | Hit rate@10 | Coverage@10 |
 |---|---|---|---|---|---|
-| Global popularity | 0.130 | 0.191 | 0.077 | 0.422 | 0.5% |
-| Segment popularity (**baseline**) | 0.193 | 0.287 | 0.116 | 0.560 | 1.4% |
-| Embeddings only (128 dims) | 0.108 | 0.139 | 0.071 | 0.295 | 84.9% |
-| Embeddings + global prior | 0.208 | 0.277 | 0.138 | 0.523 | 23.6% |
-| **Embeddings + segment prior (champion)** | **0.221** | **0.290** | **0.148** | **0.541** | **23.6%** |
+| Global popularity | 0.036 | 0.074 | 0.022 | 0.089 | 0.1% |
+| Segment popularity | 0.074 | 0.127 | 0.054 | 0.151 | 0.4% |
+| **Recently viewed + segment fill (baseline)** | 0.307 | 0.413 | 0.262 | 0.466 | 49% |
+| Embeddings only | 0.147 | 0.216 | 0.120 | 0.248 | 63% |
+| Embeddings + segment prior (v4) | 0.223 | 0.332 | 0.180 | 0.375 | 16% |
+| Embeddings, excluding seen products | 0.051 | 0.083 | 0.037 | 0.109 | 18% |
+| **Embeddings + segment prior + seen boost (champion v5)** | **0.320** | **0.437** | **0.271** | **0.488** | **47%** |
 
 What the experiments showed:
-- The first embedding model **lost to the popularity baseline**. Pure similarity over-diversifies.
-  Always measure against a simple baseline before shipping.
-- Blending in a popularity prior wins on accuracy **and** shows 17x more of the catalogue than the
-  baseline (long-tail exposure matters to the business, not just NDCG).
-- Excluding already-seen items hurt every metric: DIY customers re-buy consumables (paint, screws).
+- **A naive baseline hides the real bar.** The first real-data model beat segment popularity 3x
+  and was promoted, but a "recently viewed" heuristic beat *it* (0.307 vs 0.223): 77% of the
+  model's hits were products the customer had already seen. The gate now uses that heuristic.
+- **Real shoppers come back to what they viewed** (comparison shopping before buying a drill or
+  an oven). Excluding seen products collapses NDCG to 0.051, so discovery alone is hard.
+- The champion combines both behaviours: it re-ranks recent products first and fills the list
+  with embedding recommendations. +4% NDCG and +6% recall over the strong baseline, with more
+  hits on products the customer had not seen.
+- 128 dimensions perform like 256 once the boost is on, so the smaller model was kept.
 
 ## Promotion gate
 
@@ -106,15 +120,22 @@ current champion. The API loads `models:/reco-embeddings@champion`, so promotion
 just alias moves, followed by `POST /admin/reload`.
 
 ```
-Model version 1: ndcg=0.2210 baseline=0.1925 champion=0.0000 -> PROMOTED
-Model version 2: ndcg=0.1660 baseline=0.1925 champion=0.2210 -> not promoted
+Model version 4: ndcg=0.2235 baseline=0.0744 champion=0.0000 -> PROMOTED   (baseline: segment popularity)
+Model version 5: ndcg=0.3199 baseline=0.3074 champion=0.2235 -> PROMOTED   (baseline: recently viewed)
 ```
+Versions 1-3 were trained on an earlier synthetic dataset. Every run and version is tagged with
+`data_source`, and the old champion alias was retired when the data changed, because NDCG
+measured on a different evaluation set is not comparable.
 
 ## Data quality
 
-- **dbt tests**: unique / not_null / relationships / accepted_values / accepted_range, a custom
-  `not_in_future` generic test, and a singular test that every purchase follows a view in the same
-  session (a data contract with the producing domain).
+- **dbt tests**: unique / not_null / relationships / accepted_values / accepted_range and a custom
+  `not_in_future` generic test. On the real data they caught **216 products with a price of 0**
+  (now inactive, never recommended) and **3,802 duplicate events** (removed in staging).
+- **Data contract** (singular test): a purchase must follow a view or add-to-cart of the product.
+  The first version required the same session and failed on 431 purchases (1.4%): 313 were
+  viewed in an *earlier* session, only 118 (0.4%) had no trace. The rule now accepts earlier
+  sessions and fails above a 1% violation rate.
 - **Model contract** on `fct_interactions`: column types and constraints are enforced, because
   training and features depend on that schema.
 - **Elementary**: volume and dimension anomaly detection on events (catches an upstream topic that
@@ -129,13 +150,14 @@ Prerequisites: `uv`, `dbt-bigquery`, `terraform`, `docker`, `gcloud auth applica
 ```bash
 cp .env.example .env            # set GCP_PROJECT
 make infra                      # Terraform: datasets, bucket, service account
-make data load                  # generate synthetic data, land it in BigQuery raw
+# download 2019-Nov.csv.zip from the Kaggle link above into data/source/
+make data load                  # filter + reshape the public month, land it in BigQuery raw
 make dbt-build                  # staging -> marts -> features, all tests + Elementary
 make services                   # Redis on :6380
 make mlflow                     # MLflow on :5001 (separate terminal)
 make train materialize          # ZenML pipelines
 make serve                      # API on :8010
-curl "localhost:8010/reco?client_id=C000949&k=5"
+curl "localhost:8010/reco?client_id=U343318208&k=5"
 curl -X POST localhost:8010/events -H 'content-type: application/json' \
      -d '{"client_id":"NEW1","product_id":"P00601"}'
 ```
@@ -148,7 +170,8 @@ the MLflow UI is at `http://127.0.0.1:5001`.
 ```
 infra/terraform/        GCP resources (datasets, bucket, IAM)
 dbt/                    staging, marts, features + tests, contract, Elementary
-src/reco/data/          synthetic data generator, BigQuery loader/reader
+src/reco/data/          REES46 preparation, BigQuery loader/reader (+ synthetic generator for tests)
+notebooks/              offline comparison of baselines and model variants
 src/reco/models/        recommender, MLflow pyfunc packaging
 src/reco/evaluation/    Top-K metrics (precision, recall, NDCG, MAP, hit rate, coverage)
 src/reco/pipelines/     ZenML steps, pipelines, custom materializer
@@ -165,10 +188,17 @@ tests/                  unit + API tests (fakeredis, no cloud needed)
 | MLflow on SQLite | MLflow on Cloud Run or GKE with Cloud SQL backend + GCS artifacts |
 | `/events` endpoint | Kafka consumer (or Dataflow) updating real-time features; at-least-once handled by idempotent keys |
 | Redis container | Memorystore, or a managed feature store (Feast / Vertex AI Feature Store) |
-| Brute-force scoring (2k items) | ANN retrieval (ScaNN / Vertex Vector Search) then a ranking model, for a catalogue of 100k+ items |
+| Brute-force scoring (16.6k items) | ANN retrieval (ScaNN / Vertex Vector Search) then a ranking model, for a catalogue of 100k+ items |
 | Offline metrics | A/B test on CTR / add-to-cart / revenue per session; offline metrics only gate candidates |
 | Logs | Datadog / Grafana: latency SLOs, fallback rate, feature freshness, score distribution drift |
 | Manual promotion trigger | CI/CD: model validation then canary rollout of the new alias, auto rollback on SLO breach |
+
+Lessons from running it:
+- **Retention rules can delete data silently.** A 400-day partition expiry on `raw` dropped every
+  2019 partition on load (0 rows, no error). Removed in Terraform; retention is now per table.
+- **A pickled model depends on the serving code.** After a scoring change, `POST /admin/reload`
+  loaded v5 into an API still running the old code, so the new boost was ignored. Model and code
+  must ship together (one Docker image per release, with the model version pinned in it).
 
 Next model iterations: two-tower retrieval with content features (category, brand, price) for
 cold-start items, a ranking stage (GBDT / LightGBM with context features: promotions, seasonality,
