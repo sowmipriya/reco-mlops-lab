@@ -1,0 +1,81 @@
+version: 2
+
+models:
+  - name: dim_products
+    description: Product dimension with promotion history.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+
+  - name: dim_customers
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+
+  - name: fct_interactions
+    description: >
+      Behavioural events with implicit-feedback weight and train/test split.
+      Contract enforced: downstream training and feature jobs rely on this schema.
+    config:
+      contract:
+        enforced: true
+      elementary:
+        timestamp_column: event_ts
+    columns:
+      - name: event_id
+        data_type: string
+        constraints: [{type: not_null}]
+        data_tests: [unique]
+      - name: customer_id
+        data_type: string
+        constraints: [{type: not_null}]
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_id
+      - name: session_id
+        data_type: string
+      - name: product_id
+        data_type: string
+        constraints: [{type: not_null}]
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_id
+      - name: event_type
+        data_type: string
+      - name: event_ts
+        data_type: timestamp
+        constraints: [{type: not_null}]
+      - name: quantity
+        data_type: int64
+      - name: channel
+        data_type: string
+      - name: weight
+        data_type: float64
+        data_tests: [not_null]
+      - name: split
+        data_type: string
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["train", "test"]
+    data_tests:
+      # Elementary: learn the normal daily volume and alert on anomalies
+      # (e.g. an upstream Kafka topic stops sending events).
+      - elementary.volume_anomalies:
+          arguments:
+            time_bucket: {period: day, count: 1}
+            training_period: {period: day, count: 60}
+            detection_period: {period: day, count: 7}
+          config:
+            severity: warn
+      - elementary.dimension_anomalies:
+          arguments:
+            dimensions: ["event_type"]
+            training_period: {period: day, count: 60}
+            detection_period: {period: day, count: 7}
+          config:
+            severity: warn

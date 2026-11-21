@@ -1,0 +1,58 @@
+[project]
+name = "reco"
+version = "0.1.0"
+description = "End-to-end recommendation system: dbt/BigQuery data pipelines, ZenML+MLflow ML pipelines, real-time FastAPI serving"
+readme = "README.md"
+authors = [
+    { name = "sowmipriya", email = "sowmipriya@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.165.0",
+    "mlflow>=3.18.0",
+    "numpy>=2.5.5",
+    "pandas>=3.1.1",
+    "pyarrow>=26.0.1",
+    "pydantic-settings>=2.16.3",
+    "redis>=8.1.0",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "fakeredis>=2.40.0",
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+pipelines = [
+    "db-dtypes>=1.9.0",
+    "google-cloud-bigquery>=3.47.0",
+    "pandas-gbq>=0.35.4",
+    "zenml[local]>=0.99.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["dbt"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["reco"]
+known-third-party = ["mlflow"]
+
+[tool.uv]
+default-groups = ["dev", "pipelines"]

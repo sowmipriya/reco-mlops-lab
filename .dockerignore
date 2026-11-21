@@ -1,0 +1,10 @@
+.venv
+.git
+data
+mlflow
+dbt
+infra
+tests
+.zen
+**/__pycache__
+.env

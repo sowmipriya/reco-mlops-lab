@@ -1,0 +1,31 @@
+name: reco
+version: "1.0.0"
+profile: reco
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Days held out at the end of the timeline for offline evaluation.
+  test_days: 14
+  # Implicit-feedback weights per event type.
+  event_weights: {view: 1, add_to_cart: 3, purchase: 5}
+
+models:
+  reco:
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+    features:
+      +schema: features
+      +materialized: table
+  elementary:
+    +schema: elementary
+
+data_tests:
+  +store_failures: false
