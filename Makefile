@@ -7,7 +7,7 @@ export ZENML_ANALYTICS_OPT_IN=false
 # One month of the public REES46 dataset (Kaggle), see src/reco/data/prepare_rees46.py
 REES46_ZIP ?= data/source/2019-Nov.csv.zip
 
-.PHONY: help infra data load dbt-deps dbt-build services mlflow train materialize serve test lint all
+.PHONY: help infra data load dbt-deps dbt-build services mlflow train materialize serve kafka consumer website test lint all
 
 help:  ## Show targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -43,6 +43,15 @@ materialize:  ## ZenML pipeline: BigQuery features -> Redis online store
 
 serve:  ## Run the real-time API on :8010
 	uv run uvicorn reco.serving.app:app --host 127.0.0.1 --port 8010
+
+kafka:  ## Start Redpanda (Kafka API) on :19092 and its console on :8090
+	docker compose up -d redpanda redpanda-console
+
+consumer:  ## Kafka consumer: reco.events -> Redis real-time features (DLQ for bad messages)
+	uv run python -m reco.streaming.consumer
+
+website:  ## Demo storefront on :8020 (calls the Reco API on :8010)
+	uv run uvicorn reco.website.app:app --host 127.0.0.1 --port 8020
 
 test:  ## Unit + API tests
 	uv run pytest -q

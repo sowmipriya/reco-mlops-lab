@@ -1,8 +1,30 @@
-# Local serving stack: Redis online store + MLflow registry + recommendation API.
+# Local serving stack: Redis online store, Redpanda (Kafka API) event stream, MLflow registry,
+# recommendation API.
 services:
   redis:
     image: redis:7.4-alpine
     ports: ["6380:6379"]
+
+  # Kafka-compatible broker (single node). Inside Docker: redpanda:9092. From the host: localhost:19092.
+  redpanda:
+    image: redpandadata/redpanda:v24.3.7
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports: ["19092:19092"]
+
+  # Web UI: topics, messages, partitions, consumer groups and their lag.
+  redpanda-console:
+    image: redpandadata/console:v2.8.5
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports: ["8090:8080"]
+    depends_on: [redpanda]
 
   mlflow:
     image: python:3.12-slim

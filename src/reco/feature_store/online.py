@@ -2,8 +2,8 @@
 
 Two kinds of features, as in the production design:
 - pre-built (batch) features: computed by dbt in BigQuery, materialised here by a pipeline
-- real-time features: the customer's latest events, pushed by a stream consumer (Kafka in
-  production, the API's /events endpoint here) and read at request time.
+- real-time features: the customer's latest events, pushed by the Kafka consumer
+  (reco.streaming.consumer) and read at request time.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import redis
 CUSTOMER_KEY = "fs:customer:{customer_id}"
 RECENT_KEY = "fs:recent:{customer_id}"
 META_KEY = "fs:meta"
+SEEN_KEY = "fs:seen:{event_id}"
 
 
 @dataclass
@@ -73,6 +74,13 @@ class OnlineFeatureStore:
         pipe.ltrim(key, 0, self.recent_max - 1)
         pipe.expire(key, 7 * 24 * 3600)  # real-time signal only matters for a few days
         pipe.execute()
+
+    def is_event_seen(self, event_id: str) -> bool:
+        return bool(self.r.exists(SEEN_KEY.format(event_id=event_id)))
+
+    def mark_event_seen(self, event_id: str, ttl_s: int = 24 * 3600) -> None:
+        """Idempotency marker: a redelivered event (at-least-once) is recognised and skipped."""
+        self.r.set(SEEN_KEY.format(event_id=event_id), 1, ex=ttl_s)
 
     # ------------------------------------------------------------- serving
     def get_customer(self, customer_id: str) -> tuple[CustomerFeatures, list[str]]:

@@ -66,8 +66,14 @@ def read_filtered(src: Path) -> pd.DataFrame:
                 convert_options=pv.ConvertOptions(
                     column_types={"product_id": pa.string(), "user_id": pa.string(), "price": pa.float64()},
                     include_columns=[
-                        "event_time", "event_type", "product_id", "category_code",
-                        "brand", "price", "user_id", "user_session",
+                        "event_time",
+                        "event_type",
+                        "product_id",
+                        "category_code",
+                        "brand",
+                        "price",
+                        "user_id",
+                        "user_session",
                     ],
                 ),
             )
@@ -113,7 +119,11 @@ def build_tables(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     products["category"] = products["category_code"].map(department)
     products["subcategory"] = products["category_code"].str.rsplit(".", n=1).str[-1]
     products["product_name"] = (
-        products["brand"].str.title() + " " + products["subcategory"].str.replace("_", " ") + " " + products["product_id"]
+        products["brand"].str.title()
+        + " "
+        + products["subcategory"].str.replace("_", " ")
+        + " "
+        + products["product_id"]
     )
     products["product_id"] = "P" + products["product_id"]
     products["is_active"] = True
@@ -121,9 +131,7 @@ def build_tables(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         ["product_id", "product_name", "category", "subcategory", "category_code", "brand", "price", "is_active"]
     ]
 
-    customers = (
-        events.groupby("customer_id")["event_ts"].min().rename("first_seen_ts").reset_index()
-    )
+    customers = events.groupby("customer_id")["event_ts"].min().rename("first_seen_ts").reset_index()
     return {"events": events.reset_index(drop=True), "products": products, "customers": customers}
 
 

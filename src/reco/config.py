@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Data: which raw dataset the models were trained on (champion scores are only comparable within one)
     data_source: str = "rees46-2019-11-diy"
 
+    # Event stream (Redpanda / Kafka API)
+    kafka_bootstrap: str = "localhost:19092"
+    events_topic: str = "reco.events"
+    events_dlq_topic: str = "reco.events.dlq"
+    events_consumer_group: str = "reco-online-features"
+
     # Modelling
     top_k: int = 10
     test_days: int = 14

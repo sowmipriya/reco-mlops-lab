@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bricolab demo store</title>
+<style>
+/* Layout: store content on the left, a sticky "How it works" panel on the right (stacks on narrow screens). */
+:root {
+  --bg: #f5f6f2; --surface: #ffffff; --ink: #1c2420; --muted: #5d6b64; --line: #dde2dc;
+  --accent: #2f6b4f; --accent-ink: #ffffff; --chip: #eef1ec; --rt: #b45309;
+  --tools: #c2410c; --kitchen: #0f766e; --plumbing_bathroom: #1d4ed8; --heating_climate: #b91c1c;
+  --storage_lighting: #7c3aed; --garden: #4d7c0f;
+  --font: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111614; --surface: #19201d; --ink: #e5ebe7; --muted: #9aa8a1; --line: #2b3531;
+          --accent: #5fbf8f; --accent-ink: #0d1411; --chip: #222b27; --rt: #f59e0b; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); }
+header { background: var(--surface); border-bottom: 1px solid var(--line); }
+.bar { max-width: 1320px; margin: 0 auto; padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.logo { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; cursor: pointer; }
+.logo small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
+nav { display: flex; flex-wrap: wrap; gap: 6px; }
+button { font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 6px 12px; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.on { background: var(--chip); border-color: var(--accent); font-weight: 600; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.customers { border-top: 1px solid var(--line); }
+.customers .bar { padding-block: 10px; font-size: 14px; }
+.customers label { color: var(--muted); }
+input { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); width: 150px; }
+main { max-width: 1320px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; align-items: start; }
+@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 26px 0 10px; }
+.sub { color: var(--muted); margin: 0 0 8px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
+.card:hover { border-color: var(--accent); }
+.tile { height: 92px; display: flex; align-items: flex-end; padding: 10px; color: #fff; font-weight: 700; text-transform: capitalize; font-size: 15px; }
+.card .body { padding: 10px; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.card .name { font-weight: 600; }
+.meta { color: var(--muted); font-size: 12.5px; }
+.price { font-weight: 700; font-variant-numeric: tabular-nums; }
+.tag { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: var(--chip); color: var(--muted); }
+.tag.rt { color: var(--rt); font-weight: 600; }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.strip .tile { height: 54px; font-size: 13px; }
+.empty { color: var(--muted); background: var(--surface); border: 1px dashed var(--line); border-radius: 8px; padding: 14px; }
+.product { display: grid; grid-template-columns: 260px 1fr; gap: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+@media (max-width: 640px) { .product { grid-template-columns: 1fr; } }
+.product .tile { height: 200px; border-radius: 6px; font-size: 22px; }
+aside { position: sticky; top: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+aside h3 { margin: 0; font-size: 15px; }
+aside p { margin: 0; color: var(--muted); font-size: 13px; }
+dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13.5px; }
+dt { color: var(--muted); }
+dd { margin: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.trace { display: flex; flex-direction: column; gap: 8px; }
+.call { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; }
+.call code { font-family: var(--mono); font-weight: 600; overflow-wrap: anywhere; }
+.call .nums { color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.strategy { font-weight: 700; color: var(--accent); }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 6px; font-size: 14px; }
+.error { color: var(--tools); }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span class="logo" id="logo" tabindex="0">Bricolab <small>demo store · real REES46 data</small></span>
+    <nav id="departments" aria-label="Departments"></nav>
+  </div>
+  <div class="customers">
+    <div class="bar">
+      <label>Shopping as:</label>
+      <span id="samples" style="display:flex;flex-wrap:wrap;gap:6px"></span>
+      <button id="new-visitor">New visitor</button>
+      <input id="custom-id" placeholder="Customer id" aria-label="Customer id">
+      <button id="use-id">Use</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section id="view" aria-live="polite"></section>
+  <aside>
+    <div>
+      <h3>How it works</h3>
+      <p>Every page calls the website backend. It reads recommendations from the Reco API and publishes clicks to Kafka. The latest calls appear below.</p>
+    </div>
+    <dl id="profile"></dl>
+    <div class="trace" id="trace"></div>
+  </aside>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const state = { clientId: null, departments: [], samples: [] };
+const $ = (id) => document.getElementById(id);
+const label = (s) => (s || "").replaceAll("_", " ");
+const colour = (dept) => `var(--${dept}, var(--accent))`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+function toast(text) {
+  const t = $("toast"); t.textContent = text; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.hidden = true), 2200);
+}
+
+function card(p, extra = "") {
+  return `<div class="card" tabindex="0" data-product="${esc(p.product_id)}">
+    <div class="tile" style="background:${colour(p.category)}">${esc(label(p.subcategory))}</div>
+    <div class="body">
+      <span class="name">${esc(p.brand ? p.brand[0].toUpperCase() + p.brand.slice(1) : "Unbranded")} ${esc(label(p.subcategory))}</span>
+      <span class="meta">${esc(label(p.category))} · ${esc(p.product_id)}</span>
+      <span class="price">${p.price != null ? p.price.toFixed(2) : "-"}</span>
+      ${extra}
+    </div></div>`;
+}
+
+function showTrace(trace) {
+  $("trace").innerHTML = trace.map((t) => `<div class="call">
+      <code>${esc(t.call)}</code> <span class="meta">${esc(t.status)}</span>
+      ${t.strategy ? `<div>strategy: <span class="strategy">${esc(t.strategy)}</span> · model v${esc(t.model_version)}</div>` : ""}
+      <div class="nums">round trip ${t.round_trip_ms} ms${t.api_latency_ms != null ? ` · inside the API ${t.api_latency_ms} ms` : ""}</div>
+    </div>`).join("");
+}
+
+function showProfile(f) {
+  if (!f) { $("profile").innerHTML = `<dt>customer</dt><dd>${esc(state.clientId)}</dd>`; return; }
+  $("profile").innerHTML = `
+    <dt>customer</dt><dd>${esc(f.client_id)}</dd>
+    <dt>known</dt><dd>${f.known_customer ? "yes (pre-built features)" : "no (new visitor)"}</dd>
+    <dt>segment</dt><dd>${esc(f.segment || "-")}</dd>
+    <dt>events (30 d)</dt><dd>${f.n_events_30d}</dd>
+    <dt>batch history</dt><dd>${f.batch_history.length} products</dd>
+    <dt>real-time</dt><dd>${f.realtime_history.length} products this visit</dd>`;
+}
+
+async function showHome() {
+  const view = $("view");
+  view.innerHTML = `<p class="sub">Loading…</p>`;
+  try {
+    const d = await api(`/api/home?client_id=${encodeURIComponent(state.clientId)}`);
+    const history = d.history.length
+      ? `<div class="strip">${d.history.map((p) => card(p, `<span class="tag ${p.source === "real-time" ? "rt" : ""}">${p.source}</span>`)).join("")}</div>`
+      : `<div class="empty">No history yet. Open a few products: each one is published to Kafka as a view event, and your recommendations update within milliseconds.</div>`;
+    const why = {
+      personalized: "Personalised from your recent products (embeddings + your segment + recent items first).",
+      segment_popularity: "Popular in your segment (not enough history for personalisation).",
+      global_popularity: "Best sellers (new visitor: no history yet).",
+    }[d.strategy] || d.strategy;
+    view.innerHTML = `
+      <h1>Recommended for you</h1>
+      <p class="sub">${esc(why)}</p>
+      <div class="grid">${d.recommended.map((p) => card(p, p.score != null ? `<span class="meta">score ${p.score.toFixed(3)}</span>` : "")).join("")}</div>
+      <h2>Your recent activity</h2>
+      ${history}`;
+    showProfile(d.features); showTrace(d.trace); markNav(null);
+  } catch (e) { view.innerHTML = `<p class="error">${esc(e.message)}. Is the Reco API running on port 8010?</p>`; }
+}
+
+async function showDepartment(dept) {
+  const view = $("view");
+  try {
+    const d = await api(`/api/department/${encodeURIComponent(dept)}`);
+    view.innerHTML = `<h1 style="text-transform:capitalize">${esc(label(dept))}</h1>
+      <p class="sub">Most popular in this department right now (time-decayed popularity, no customer context).</p>
+      <div class="grid">${d.products.map((p) => card(p)).join("")}</div>`;
+    showTrace(d.trace); markNav(dept);
+  } catch (e) { view.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+}
+
+async function showProduct(pid) {
+  const view = $("view");
+  try {
+    const d = await api(`/api/product/${encodeURIComponent(pid)}?client_id=${encodeURIComponent(state.clientId)}`);
+    const p = d.product;
+    view.innerHTML = `
+      <p><button id="back">← Back to my recommendations</button></p>
+      <div class="product">
+        <div class="tile" style="background:${colour(p.category)}">${esc(label(p.subcategory))}</div>
+        <div>
+          <h1>${esc(p.product_name)}</h1>
+          <p class="sub" style="text-transform:capitalize">${esc(label(p.category))} · ${esc(label(p.subcategory))} · ${esc(p.brand || "unbranded")}</p>
+          <p class="price" style="font-size:22px">${p.price != null ? p.price.toFixed(2) : "-"}</p>
+          <p><button class="primary" id="add-cart">Add to cart</button></p>
+          <p class="meta">Opening this page published a <b>view</b> event to Kafka. The consumer updates your real-time features in Redis; go back to see your recommendations change.</p>
+        </div>
+      </div>
+      <h2>Customers also viewed</h2>
+      <p class="sub">Nearest products in the embedding space.</p>
+      <div class="grid">${d.similar.map((s) => card(s)).join("")}</div>`;
+    $("back").onclick = showHome;
+    $("add-cart").onclick = async () => {
+      const r = await api("/api/cart", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ client_id: state.clientId, product_id: pid }) });
+      showTrace(r.trace); toast("Added to cart");
+    };
+    showTrace(d.trace); window.scrollTo({ top: 0 });
+  } catch (e) { view.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+}
+
+function markNav(dept) {
+  document.querySelectorAll("#departments button").forEach((b) => b.classList.toggle("on", b.dataset.dept === dept));
+}
+
+function setCustomer(id) {
+  state.clientId = id;
+  document.querySelectorAll("#samples button").forEach((b) => b.classList.toggle("on", b.dataset.id === id));
+  showHome();
+}
+
+$("view").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-product]"); if (c) showProduct(c.dataset.product);
+});
+$("view").addEventListener("keydown", (e) => {
+  const c = e.target.closest("[data-product]"); if (c && e.key === "Enter") showProduct(c.dataset.product);
+});
+$("logo").onclick = showHome;
+$("new-visitor").onclick = () => setCustomer("VISITOR-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+$("use-id").onclick = () => { const v = $("custom-id").value.trim(); if (v) setCustomer(v); };
+$("custom-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("use-id").click(); });
+
+(async () => {
+  const m = await api("/api/meta");
+  state.departments = m.departments; state.samples = m.sample_customers;
+  $("departments").innerHTML = m.departments.map((d) => `<button data-dept="${esc(d)}" style="text-transform:capitalize">${esc(label(d))}</button>`).join("");
+  $("departments").onclick = (e) => { const b = e.target.closest("button"); if (b) showDepartment(b.dataset.dept); };
+  $("samples").innerHTML = m.sample_customers.map((c) => `<button data-id="${esc(c.customer_id)}">${esc(label(c.segment))} shopper</button>`).join("");
+  $("samples").onclick = (e) => { const b = e.target.closest("button"); if (b) setCustomer(b.dataset.id); };
+  setCustomer(m.sample_customers[0]?.customer_id || "VISITOR-DEMO");
+})();
+</script>
+</body>
+</html>

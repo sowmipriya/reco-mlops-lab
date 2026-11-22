@@ -16,8 +16,9 @@ plumbing & bathroom, heating & climate, storage & lighting, garden):
 | Data pipelines | BigQuery, dbt (tests, model contracts), Elementary (anomaly detection) |
 | ML pipelines | ZenML (orchestration, artifacts, lineage), MLflow (tracking, registry, aliases) |
 | Model | Item embeddings (truncated SVD on implicit feedback) + segment prior + recency boost on seen items |
-| Online features | Redis: batch-materialised features + real-time event stream |
-| Serving | FastAPI, Docker |
+| Event stream | Redpanda (Kafka API): `reco.events` topic keyed by customer, consumer group, dead-letter topic |
+| Online features | Redis: batch-materialised features + real-time features from the Kafka consumer |
+| Serving | FastAPI Reco API, demo storefront (website + backend), Docker |
 | Quality | pytest, ruff, GitHub Actions (lint, tests, dbt parse, terraform validate, docker build) |
 
 ## Architecture
@@ -25,7 +26,7 @@ plumbing & bathroom, heating & climate, storage & lighting, garden):
 ```mermaid
 flowchart LR
     subgraph sources["Source domains (operational plane)"]
-        EV[Behavioural events<br/>Kafka topic]
+        EV[Behavioural events<br/>Kafka topic reco.events]
         CAT[Product catalogue API]
         CUS[Customer API]
         PRO[Promotions API]
@@ -59,7 +60,8 @@ flowchart LR
     FEAT --> BASE --> REG
     REG -->|new version,<br/>alias if better| MLF
     FEAT --> MAT -->|pre-built features| REDIS
-    EV -->|real-time events| REDIS
+    EV -->|consumer group<br/>reco-online-features| REDIS
+    WEB -->|clicks| EV
     MLF -->|load champion| API
     REDIS -->|features in 1 round trip| API
     WEB -->|GET /reco?client_id=| API
@@ -67,7 +69,7 @@ flowchart LR
 
 ### Request path (`GET /reco?client_id=U343318208&k=10`)
 1. One Redis round trip fetches **pre-built features** (segment, recent products from BigQuery) and
-   **real-time features** (latest events pushed by the stream consumer).
+   **real-time features** (latest clicks, applied by the Kafka consumer within milliseconds).
 2. Histories are merged: real-time first, most recent first, deduplicated.
 3. The in-memory **champion model** (loaded once from the MLflow registry) builds a user vector from
    the recency-weighted item embeddings, scores the 16.6k active products, adds the segment's
@@ -156,11 +158,34 @@ make dbt-build                  # staging -> marts -> features, all tests + Elem
 make services                   # Redis on :6380
 make mlflow                     # MLflow on :5001 (separate terminal)
 make train materialize          # ZenML pipelines
-make serve                      # API on :8010
+make kafka                      # Redpanda on :19092, console on http://localhost:8090
+make serve                      # Reco API on :8010           (separate terminal)
+make consumer                   # reco.events -> Redis          (separate terminal)
+make website                    # demo store on :8020          (separate terminal)
 curl "localhost:8010/reco?client_id=U343318208&k=5"
-curl -X POST localhost:8010/events -H 'content-type: application/json' \
-     -d '{"client_id":"NEW1","product_id":"P00601"}'
 ```
+
+Open `http://127.0.0.1:8020`, pick a shopper or "New visitor" and open products: each click is
+published to Kafka, the consumer updates Redis, and the next page is personalised.
+
+## Real-time event stream
+
+```
+website backend --produce (key = client_id)--> reco.events (3 partitions)
+     --> consumer group reco-online-features --> Redis fs:recent:{client_id}
+     \-> malformed messages --> reco.events.dlq
+```
+
+- **Ordering**: the key is the customer id, so one customer's clicks stay in one partition, in order.
+- **At-least-once**: auto-commit is off; the offset is committed after Redis is updated, so a crash
+  replays messages instead of losing them. The producer uses `acks=all` and idempotence.
+- **Idempotency**: each event carries an `event_id`; the consumer keeps a 24 h marker per id and
+  skips redeliveries (rewinding the group to the start re-applied nothing).
+- **Bad data**: messages that fail the `ClickEvent` contract go to the dead-letter topic and the
+  consumer keeps running. (A replay re-sends them to the DLQ, so DLQ readers should de-duplicate.)
+- **Outage test**: with the consumer stopped, three clicks raised the group lag to 3 and the
+  visitor still got best sellers; on restart it resumed from the committed offset, applied the
+  three clicks in order and the visitor was personalised, lag back to 0.
 
 `uv run zenml login --local` opens the ZenML dashboard (runs, step metadata, artifact lineage);
 the MLflow UI is at `http://127.0.0.1:5001`.
@@ -176,7 +201,9 @@ src/reco/models/        recommender, MLflow pyfunc packaging
 src/reco/evaluation/    Top-K metrics (precision, recall, NDCG, MAP, hit rate, coverage)
 src/reco/pipelines/     ZenML steps, pipelines, custom materializer
 src/reco/feature_store/ Redis online store (batch + real-time)
-src/reco/serving/       FastAPI app
+src/reco/serving/       FastAPI Reco API
+src/reco/streaming/     Kafka event contract, producer, consumer (+ DLQ)
+src/reco/website/       demo storefront (backend + page)
 tests/                  unit + API tests (fakeredis, no cloud needed)
 ```
 
@@ -186,7 +213,7 @@ tests/                  unit + API tests (fakeredis, no cloud needed)
 |---|---|
 | ZenML local orchestrator | ZenML stack: Kubernetes / Vertex orchestrator, GCS artifact store, scheduled runs (or Argo Workflows) |
 | MLflow on SQLite | MLflow on Cloud Run or GKE with Cloud SQL backend + GCS artifacts |
-| `/events` endpoint | Kafka consumer (or Dataflow) updating real-time features; at-least-once handled by idempotent keys |
+| Single Redpanda node, 3 partitions | Managed Kafka (3 brokers, replication 3), more partitions and consumer replicas; a second consumer group landing events in BigQuery for the next training run |
 | Redis container | Memorystore, or a managed feature store (Feast / Vertex AI Feature Store) |
 | Brute-force scoring (16.6k items) | ANN retrieval (ScaNN / Vertex Vector Search) then a ranking model, for a catalogue of 100k+ items |
 | Offline metrics | A/B test on CTR / add-to-cart / revenue per session; offline metrics only gate candidates |

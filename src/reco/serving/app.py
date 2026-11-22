@@ -35,6 +35,18 @@ class RecoResponse(BaseModel):
     latency_ms: float
 
 
+class FeaturesResponse(BaseModel):
+    client_id: str
+    known_customer: bool
+    segment: str | None
+    favorite_category: str | None
+    n_events_30d: int
+    feature_ts: str | None
+    batch_history: list[str]
+    realtime_history: list[str]
+    merged_history: list[str]
+
+
 class Event(BaseModel):
     client_id: str
     product_id: str
@@ -93,6 +105,23 @@ def create_app(store: OnlineFeatureStore | None = None, holder: ModelHolder | No
         h: ModelHolder = request.app.state.holder
         return {"status": "ok", "model_version": h.version, "feature_store": request.app.state.store.meta()}
 
+    @app.get("/features/{client_id}", response_model=FeaturesResponse)
+    def features(request: Request, client_id: str) -> FeaturesResponse:
+        """What the model sees for this customer: pre-built (batch) + real-time features."""
+        model, _ = _model(request)
+        f, realtime = request.app.state.store.get_customer(client_id)
+        return FeaturesResponse(
+            client_id=client_id,
+            known_customer=f.feature_ts is not None,
+            segment=f.segment,
+            favorite_category=f.favorite_category,
+            n_events_30d=f.n_events_30d,
+            feature_ts=f.feature_ts,
+            batch_history=f.recent_products,
+            realtime_history=realtime,
+            merged_history=merge_history(realtime, f.recent_products, model.params.history_size),
+        )
+
     @app.get("/reco", response_model=RecoResponse)
     def recommend(request: Request, client_id: str, k: int = Query(10, ge=1, le=50)) -> RecoResponse:
         start = time.perf_counter()
@@ -143,7 +172,8 @@ def create_app(store: OnlineFeatureStore | None = None, holder: ModelHolder | No
 
     @app.post("/events", status_code=202)
     def ingest_event(request: Request, event: Event) -> dict:
-        """Stand-in for the Kafka consumer that keeps real-time features fresh."""
+        """Direct write for tests and local debugging. The website publishes to Kafka instead,
+        and reco.streaming.consumer applies those events to the same Redis keys."""
         request.app.state.store.push_event(event.client_id, event.product_id)
         return {"accepted": True}
 
