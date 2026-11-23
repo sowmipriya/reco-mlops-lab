@@ -147,23 +147,41 @@ measured on a different evaluation set is not comparable.
 
 ## Running it
 
-Prerequisites: `uv`, `dbt-bigquery`, `terraform`, `docker`, `gcloud auth application-default login`.
+Prerequisites: `docker` (compose v2), `gcloud auth application-default login` (credentials are
+mounted read-only into the containers). Everything else (Python, dbt, Terraform, ZenML, MLflow, Redis,
+Redpanda, tests and lint) runs in Docker.
 
 ```bash
-cp .env.example .env            # set GCP_PROJECT
-make infra                      # Terraform: datasets, bucket, service account
-# download 2019-Nov.csv.zip from the Kaggle link above into data/source/
-make data load                  # filter + reshape the public month, land it in BigQuery raw
-make dbt-build                  # staging -> marts -> features, all tests + Elementary
-make services                   # Redis on :6380
-make mlflow                     # MLflow on :5001 (separate terminal)
-make train materialize          # ZenML pipelines
-make kafka                      # Redpanda on :19092, console on http://localhost:8090
-make serve                      # Reco API on :8010           (separate terminal)
-make consumer                   # reco.events -> Redis          (separate terminal)
-make website                    # demo store on :8020          (separate terminal)
+cp .env.example .env                    # set GCP_PROJECT
+docker compose up -d --build            # the whole stack
+docker compose logs -f bootstrap        # watch training + feature materialization
 curl "localhost:8010/reco?client_id=U343318208&k=5"
 ```
+
+`docker compose up` starts Redis, Redpanda, MLflow and the ZenML server, then runs a one-shot
+`bootstrap` container (`scripts/bootstrap.sh`): it trains with the ZenML pipeline if no champion is
+registered yet and always materializes the BigQuery features into Redis. The API, consumer and
+website start once it has finished.
+
+| Variant | Command |
+|---|---|
+| Also reload BigQuery raw from `data/raw/`, rebuild dbt, retrain | `REFRESH_DATA=1 docker compose up -d` |
+| Retrain even if a champion exists | `RETRAIN=1 docker compose up -d` |
+| Rebuild `data/raw/` from the Kaggle zip | `docker compose run --rm -v /path/to/2019-Nov.csv.zip:/app/source/rees46.zip:ro pipelines python -m reco.data.prepare_rees46 --src /app/source/rees46.zip --out data/raw` |
+| Provision GCP (datasets, bucket, service account) | `docker compose run --rm terraform init` then `... terraform apply -var project_id=$GCP_PROJECT` |
+| Tests / lint | `docker compose run --rm dev pytest -q` / `... dev ruff check src tests` |
+| Stop | `docker compose down` |
+
+The `Makefile` keeps the same commands as short aliases (`make up`, `make test`, `make train`, ...).
+
+| Service | URL |
+|---|---|
+| Reco API | http://localhost:8010 |
+| Demo store | http://localhost:8020 |
+| MLflow | http://localhost:5001 |
+| ZenML dashboard | http://localhost:8080 (user `default`, password `zenml`, override with `ZENML_USERNAME` / `ZENML_PASSWORD` in `.env`) |
+| Redpanda console | http://localhost:8090 |
+
 
 Open `http://127.0.0.1:8020`, pick a shopper or "New visitor" and open products: each click is
 published to Kafka, the consumer updates Redis, and the next page is personalised.
@@ -187,7 +205,7 @@ website backend --produce (key = client_id)--> reco.events (3 partitions)
   visitor still got best sellers; on restart it resumed from the committed offset, applied the
   three clicks in order and the visitor was personalised, lag back to 0.
 
-`uv run zenml login --local` opens the ZenML dashboard (runs, step metadata, artifact lineage);
+The ZenML dashboard (http://localhost:8080) shows runs, step metadata and artifact lineage;
 the MLflow UI is at `http://127.0.0.1:5001`.
 
 ## Repository layout

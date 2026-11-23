@@ -1,5 +1,41 @@
-# Local serving stack: Redis online store, Redpanda (Kafka API) event stream, MLflow registry,
-# recommendation API.
+# Whole stack in Docker:   docker compose up -d
+#
+# Startup order: redis, redpanda, mlflow, zenml -> bootstrap (train if no champion, features -> Redis)
+#                -> api -> consumer, website
+#   REFRESH_DATA=1 docker compose up -d   also reloads BigQuery raw + rebuilds dbt + retrains
+#   RETRAIN=1 docker compose up -d        retrains even if a champion exists
+#
+# Host ports: API :8010, website :8020, MLflow :5001, ZenML dashboard :8080, Redpanda console :8090,
+#             Redis :6380, Kafka :19092
+#
+# One-off tools (profile "jobs"):
+#   docker compose run --rm pipelines <cmd>      e.g. python -m reco.pipelines.run train
+#   docker compose run --rm dev pytest -q        tests (and ruff)
+#   docker compose run --rm terraform apply      infra/terraform
+
+x-pipelines: &pipelines
+  build: {context: ., target: pipelines}
+  env_file: .env
+  environment: &pipelines-env
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    REDIS_URL: redis://redis:6379/0
+    KAFKA_BOOTSTRAP: redpanda:9092
+    ZENML_STORE_URL: http://zenml:8080
+    ZENML_STORE_USERNAME: ${ZENML_USERNAME:-default}
+    ZENML_STORE_PASSWORD: ${ZENML_PASSWORD:-zenml}
+    # Same path as in the zenml service: the local artifact store lives on the shared zenml-data volume
+    ZENML_LOCAL_STORES_PATH: /zenml/local_stores
+    GOOGLE_APPLICATION_CREDENTIALS: /home/app/.config/gcloud/application_default_credentials.json
+  volumes:
+    - ./data:/app/data
+    - ./dbt:/app/dbt
+    - zenml-data:/zenml
+    - ${HOME}/.config/gcloud:/home/app/.config/gcloud:ro
+  depends_on:
+    zenml: {condition: service_healthy}
+    mlflow: {condition: service_healthy}
+    redis: {condition: service_started}
+
 services:
   redis:
     image: redis:7.4-alpine
@@ -25,6 +61,7 @@ services:
       KAFKA_BROKERS: redpanda:9092
     ports: ["8090:8080"]
     depends_on: [redpanda]
+    restart: on-failure
 
   mlflow:
     image: python:3.12-slim
@@ -35,11 +72,98 @@ services:
       --allowed-hosts '*'"
     ports: ["5001:5000"]
     volumes: ["./mlflow:/mlflow"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      retries: 30
+      start_period: 60s
+
+  # ZenML server + dashboard (http://localhost:8080). Pipeline runs, steps and artifacts are tracked here.
+  zenml:
+    image: zenmldocker/zenml-server:0.99.0
+    platform: linux/amd64   # only published for amd64; runs emulated on Apple Silicon
+    environment:
+      ZENML_DEFAULT_USER_NAME: ${ZENML_USERNAME:-default}
+      ZENML_DEFAULT_USER_PASSWORD: ${ZENML_PASSWORD:-zenml}
+      ZENML_SERVER_AUTO_ACTIVATE: "1"
+      ZENML_ANALYTICS_OPT_IN: "false"
+      ZENML_LOCAL_STORES_PATH: /zenml/local_stores
+    ports: ["8080:8080"]
+    volumes: ["zenml-data:/zenml"]   # server database + local artifact store
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      retries: 30
+      start_period: 60s
+
+  # One-shot: train if there is no champion yet, then BigQuery features -> Redis. Exits when done.
+  bootstrap:
+    <<: *pipelines
+    command: ["bootstrap"]
+    environment:
+      <<: *pipelines-env
+      REFRESH_DATA: ${REFRESH_DATA:-0}
+      RETRAIN: ${RETRAIN:-0}
 
   api:
-    build: .
+    build: {context: ., target: serving}
     environment:
       REDIS_URL: redis://redis:6379/0
       MLFLOW_TRACKING_URI: http://mlflow:5000
-    ports: ["8000:8000"]
-    depends_on: [redis, mlflow]
+    ports: ["8010:8000"]
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+
+  # reco.events -> Redis real-time features (DLQ for bad messages)
+  consumer:
+    build: {context: ., target: serving}
+    command: ["python", "-m", "reco.streaming.consumer"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP: redpanda:9092
+    restart: on-failure   # retries until Redpanda accepts connections
+    depends_on: [redis, redpanda]
+    healthcheck: {disable: true}
+
+  # Demo storefront: reads the catalogue from BigQuery, calls the API, produces events to Redpanda
+  website:
+    build: {context: ., target: pipelines}
+    command: ["uvicorn", "reco.website.app:app", "--host", "0.0.0.0", "--port", "8020"]
+    env_file: .env
+    environment:
+      <<: *pipelines-env
+      RECO_API_URL: http://api:8000
+    ports: ["8020:8020"]
+    volumes:
+      - ${HOME}/.config/gcloud:/home/app/.config/gcloud:ro
+    depends_on: [api, redpanda]
+
+  # ---- one-off tools, not started by `docker compose up` ----
+
+  # Any batch command: data prep, BigQuery load, dbt, pipelines
+  pipelines:
+    <<: *pipelines
+    profiles: ["jobs"]
+
+  # Unit + API tests and lint against the current source (no other services needed)
+  dev:
+    build: {context: ., target: pipelines}
+    profiles: ["jobs"]
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./pyproject.toml:/app/pyproject.toml:ro
+
+  # Terraform (BigQuery datasets, GCS bucket, service account), state stays in infra/terraform
+  terraform:
+    image: hashicorp/terraform:1.17.2
+    profiles: ["jobs"]
+    working_dir: /work
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/application_default_credentials.json
+    volumes:
+      - ./infra/terraform:/work
+      - ${HOME}/.config/gcloud:/gcloud:ro
+
+volumes:
+  zenml-data:

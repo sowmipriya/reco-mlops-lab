@@ -1,62 +1,62 @@
-# End-to-end workflow. Requires: uv, dbt (dbt-bigquery), terraform, docker, gcloud ADC.
+# End-to-end workflow, everything in Docker (docker compose). Host requirements: docker and gcloud ADC
+# (~/.config/gcloud/application_default_credentials.json, mounted read-only into the containers).
 include .env
 export
 
-DBT = cd dbt && DBT_PROFILES_DIR=. dbt
-export ZENML_ANALYTICS_OPT_IN=false
-# One month of the public REES46 dataset (Kaggle), see src/reco/data/prepare_rees46.py
+DC = docker compose
+RUN = $(DC) run --rm pipelines
+# One month of the public REES46 dataset (Kaggle), see src/reco/data/prepare_rees46.py.
+# realpath resolves the data/source symlink so the real file can be mounted into the container.
 REES46_ZIP ?= data/source/2019-Nov.csv.zip
 
-.PHONY: help infra data load dbt-deps dbt-build services mlflow train materialize serve kafka consumer website test lint all
+.PHONY: help infra build up down logs data load dbt-deps dbt-build train materialize shell test lint all
 
 help:  ## Show targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
 infra:  ## Provision BigQuery datasets, GCS bucket, service account (Terraform)
-	cd infra/terraform && terraform init -input=false && terraform apply -var project_id=$(GCP_PROJECT)
+	$(DC) run --rm terraform init -input=false
+	$(DC) run --rm terraform apply -var project_id=$(GCP_PROJECT)
+
+build:  ## Build the serving and pipelines images
+	$(DC) --profile jobs build
+
+up:  ## Start Redis, Redpanda+console, MLflow, ZenML server, API, consumer, website
+	$(DC) up -d --build
+
+down:  ## Stop everything (volumes are kept)
+	$(DC) --profile jobs down
+
+logs:  ## Follow logs of all services
+	$(DC) logs -f
 
 data:  ## Prepare the public REES46 month as a DIY store (filter + reshape)
-	uv run python -m reco.data.prepare_rees46 --src $(REES46_ZIP) --out data/raw
+	@test -n "$(realpath $(REES46_ZIP))" || { echo "$(REES46_ZIP) not found (broken symlink?). Pass REES46_ZIP=/path/to/2019-Nov.csv.zip"; exit 1; }
+	$(DC) run --rm -v "$(realpath $(REES46_ZIP))":/app/source/rees46.zip:ro pipelines \
+		python -m reco.data.prepare_rees46 --src /app/source/rees46.zip --out data/raw
 
 load:  ## Land raw data into BigQuery (Extract/Load)
-	uv run python -m reco.data.load_raw --src data/raw
+	$(RUN) python -m reco.data.load_raw --src data/raw
 
 dbt-deps:
-	$(DBT) deps
+	$(RUN) sh -c "cd dbt && dbt deps --profiles-dir ."
 
 dbt-build: dbt-deps  ## Transform + test (staging -> marts -> features), Elementary anomalies
-	$(DBT) build
-
-services:  ## Start Redis (online store)
-	docker run -d --name reco-redis -p 6380:6379 redis:7.4-alpine || docker start reco-redis
-
-mlflow:  ## Start the MLflow tracking server / model registry on :5001
-	mkdir -p mlflow && uv run mlflow server --backend-store-uri sqlite:///mlflow/mlflow.db \
-		--artifacts-destination mlflow/artifacts --host 127.0.0.1 --port 5001 \
-		--allowed-hosts "localhost:*,127.0.0.1:*,host.docker.internal:*"
+	$(RUN) sh -c "cd dbt && dbt build --profiles-dir ."
 
 train:  ## ZenML training pipeline: train, evaluate vs baseline, register, promote
-	uv run python -m reco.pipelines.run train
+	$(RUN) python -m reco.pipelines.run train
 
 materialize:  ## ZenML pipeline: BigQuery features -> Redis online store
-	uv run python -m reco.pipelines.run materialize
+	$(RUN) python -m reco.pipelines.run materialize
 
-serve:  ## Run the real-time API on :8010
-	uv run uvicorn reco.serving.app:app --host 127.0.0.1 --port 8010
-
-kafka:  ## Start Redpanda (Kafka API) on :19092 and its console on :8090
-	docker compose up -d redpanda redpanda-console
-
-consumer:  ## Kafka consumer: reco.events -> Redis real-time features (DLQ for bad messages)
-	uv run python -m reco.streaming.consumer
-
-website:  ## Demo storefront on :8020 (calls the Reco API on :8010)
-	uv run uvicorn reco.website.app:app --host 127.0.0.1 --port 8020
+shell:  ## Interactive shell in the pipelines container
+	$(RUN) bash
 
 test:  ## Unit + API tests
-	uv run pytest -q
+	$(DC) run --rm --no-deps dev pytest -q -p no:cacheprovider
 
 lint:
-	uv run ruff check src tests && uv run ruff format --check src tests
+	$(DC) run --rm --no-deps dev sh -c "ruff check src tests && ruff format --check src tests"
 
 all: data load dbt-build train materialize  ## Full batch flow
